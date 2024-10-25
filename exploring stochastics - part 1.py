@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
 def fetch_historical_prices(ticker):
-    """Fetch historical prices from Yahoo Finance."""
+    """Fetch historical prices from Yahoo Finance, caching if less than 1 day old."""
     today = datetime.now().date()
     file_name = f"{ticker}_historical_prices.csv"
 
@@ -26,13 +26,13 @@ def fetch_historical_prices(ticker):
     return data
 
 def black_scholes_simulation(start_price, mu, sigma, days=365):
-    """Simulate future price paths using the Black-Scholes model."""
+    """Simulate a single future price path using the Black-Scholes model."""
     dt = 1 / 365  # Daily time increment
     prices = [start_price]
     
     for _ in range(days):
         price_t = prices[-1]
-        # Simulate the next price
+        # Simulate the next price with annualized parameters
         price_t1 = price_t * np.exp((mu - 0.5 * sigma ** 2) * dt + sigma * np.sqrt(dt) * np.random.normal())
         prices.append(price_t1)
 
@@ -44,47 +44,65 @@ def main(ticker, simulations=500):
     
     # Calculate daily returns
     historical_data['Return'] = historical_data['Adj Close'].pct_change()
-    mu = historical_data['Return'].mean()
-    sigma = historical_data['Return'].std()
+    daily_mu = historical_data['Return'].mean()
+    daily_sigma = historical_data['Return'].std()
+
+    # Annualize the mean and standard deviation
+    mu = daily_mu * 252  # Assuming 252 trading days in a year
+    sigma = daily_sigma * np.sqrt(252)
 
     # Get the last price
     start_price = historical_data['Adj Close'][-1]
 
-    # Initialize a list to store simulated price paths
-    all_simulated_prices = []
-
-    # Run multiple simulations
-    for _ in range(simulations):
-        simulated_prices = black_scholes_simulation(start_price, mu, sigma)
-        all_simulated_prices.append(simulated_prices)
-
-    # Convert to a numpy array for easier manipulation
+    # Run multiple simulations and store paths
+    all_simulated_prices = [black_scholes_simulation(start_price, mu, sigma) for _ in range(simulations)]
     all_simulated_prices = np.array(all_simulated_prices)
 
-    # Calculate the mean and standard deviation of the simulated paths
+    # Calculate the mean path and standard deviations across simulations
     mean_path = all_simulated_prices.mean(axis=0)
-    std_dev = all_simulated_prices.std(axis=0)
+    std_dev_path = all_simulated_prices.std(axis=0)
+    upper_2std_bound = mean_path + 2 * std_dev_path
+    lower_2std_bound = mean_path - 2 * std_dev_path
+    upper_1std_bound = mean_path + std_dev_path
+    lower_1std_bound = mean_path - std_dev_path
 
-    # Calculate the upper and lower bounds (mean ± 2 standard deviations)
-    upper_bound = mean_path + 2 * std_dev
-    lower_bound = mean_path - 2 * std_dev
-
-    # Initialize a plot
+    # Plot each path with conditional coloring
     plt.figure(figsize=(12, 8))
-
-    # Plot all simulated paths
     for prices in all_simulated_prices:
-        plt.plot(prices, color='lightblue', alpha=0.1)
+        final_price = prices[-1]
+        mean_final_price = mean_path[-1]
+        upper_1std_final_price = mean_path[-1] + std_dev_path[-1]
+        lower_1std_final_price = mean_path[-1] - std_dev_path[-1]
+        upper_2std_final_price = mean_path[-1] + 2 * std_dev_path[-1]
+        lower_2std_final_price = mean_path[-1] - 2 * std_dev_path[-1]
 
-    # Plot the mean path
-    plt.plot(mean_path, color='blue', label='Mean Path', linewidth=2)
+        # Determine color based on final price
+        if final_price > upper_2std_final_price or final_price < lower_2std_final_price:
+            color = 'grey'  # More than 2 std devs from the mean
+        elif final_price > upper_1std_final_price:
+            color = 'lightgreen'  # Between 1 and 2 std devs above the mean
+        elif final_price < lower_1std_final_price:
+            color = 'lightcoral'  # Between 1 and 2 std devs below the mean
+        elif final_price > mean_final_price:
+            color = 'darkgreen'  # Above mean but within 1 std dev
+        else:
+            color = 'darkred'  # Below mean but within 1 std dev
+        
+        plt.plot(prices, color=color, alpha=0.6)
 
-    # Plot the upper and lower bounds
-    plt.plot(upper_bound, color='red', linestyle='--', label='Upper Bound (Mean + 2 Std Dev)', linewidth=2)
-    plt.plot(lower_bound, color='green', linestyle='--', label='Lower Bound (Mean - 2 Std Dev)', linewidth=2)
+    # Plot the mean path in thick white
+    plt.plot(mean_path, color='white', label='Mean Path', linewidth=2.5)
+
+    # Plot the upper and lower bounds (± 2 std devs) in thick blue
+    plt.plot(upper_2std_bound, color='blue', linestyle='--', label='Upper Bound (Mean + 2 Std Dev)', linewidth=2)
+    plt.plot(lower_2std_bound, color='blue', linestyle='--', label='Lower Bound (Mean - 2 Std Dev)', linewidth=2)
+
+    # Plot the upper and lower bounds (± 1 std dev) in thin cyan
+    plt.plot(upper_1std_bound, color='cyan', linestyle='--', label='Upper Bound (Mean + 1 Std Dev)', linewidth=1)
+    plt.plot(lower_1std_bound, color='cyan', linestyle='--', label='Lower Bound (Mean - 1 Std Dev)', linewidth=1)
 
     # Plotting settings
-    plt.title(f'Simulated Price Paths for {ticker} (500 Simulations)')
+    plt.title(f'{simulations} Simulated Price Paths for {ticker} over Next 365 Days')
     plt.xlabel('Days')
     plt.ylabel('Price')
     plt.legend()
